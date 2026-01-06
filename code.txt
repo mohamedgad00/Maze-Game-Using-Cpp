@@ -1,0 +1,371 @@
+// Maze MUST reach goal before time ends
+// Controls: Arrow keys to move player
+// 'r' to restart
+// 'q' or ESC to quit
+
+#include <windows.h>
+#include <gl/gl.h>
+#include <gl/glut.h>
+#include <math.h>
+#include <vector>
+#include <string>
+
+const int ROWS = 11;
+const int COLS = 15;
+const float CELL_SIZE = 40.0f;
+const float HALF_CELL = CELL_SIZE / 2.0f;
+const int START_TIME_SECONDS = 14;
+const int TRAP_PENALTY_SECONDS = 3; 
+
+int maze[ROWS][COLS] = {
+    {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+    {1,2,2,0,0,0,1,0,0,0,2,2,2,3,1},
+    {1,0,1,1,5,1,1,1,1,0,1,1,0,0,1},
+    {1,0,1,0,0,0,0,0,1,0,0,1,0,2,1},
+    {1,0,1,0,1,1,1,0,1,1,0,1,1,0,1},
+    {1,0,0,0,0,2,0,5,0,1,0,0,0,2,1},
+    {1,0,1,1,1,1,1,1,0,1,1,1,0,0,1},
+    {1,2,0,0,5,0,0,1,0,0,5,1,0,2,1},
+    {1,1,1,0,1,1,0,1,1,1,0,1,0,0,1},
+    {1,4,0,0,0,0,0,0,0,0,0,0,2,0,1},
+    {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
+};
+
+struct Player {
+    float x, y;
+    int cellR, cellC;
+} player;
+
+struct Enemy {
+    float x, y;
+    int dir;
+    bool horizontal;
+    float speed;
+};
+std::vector<Enemy> enemies;
+
+int remainingSeconds;
+bool gameOver;
+bool win;
+int totalDots;
+int collectedDots;
+bool hitTrap;
+
+bool inBounds(int r, int c) {
+    return (r >= 0 && r < ROWS && c >= 0 && c < COLS);
+}
+
+bool isWallCell(int r, int c) {
+    if (!inBounds(r, c)) return true;
+    return maze[r][c] == 1;
+}
+
+void cellCenter(int r, int c, float& cx, float& cy) {
+    float totalW = COLS * CELL_SIZE;
+    float totalH = ROWS * CELL_SIZE;
+    float left = -totalW / 2.0f;
+    float top = totalH / 2.0f;
+    cx = left + c * CELL_SIZE + HALF_CELL;
+    cy = top - r * CELL_SIZE - HALF_CELL;
+}
+
+void drawRectWorld(float cx, float cy, float w, float h) {
+    float x1 = cx - w / 2, x2 = cx + w / 2;
+    float y1 = cy - h / 2, y2 = cy + h / 2;
+    glBegin(GL_QUADS);
+    glVertex2f(x1, y1); glVertex2f(x2, y1);
+    glVertex2f(x2, y2); glVertex2f(x1, y2);
+    glEnd();
+}
+
+void drawCircle(float cx, float cy, float r) {
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex2f(cx, cy);
+    for (int i = 0; i <= 32; i++) {
+        float a = 2 * 3.14159265f * i / 32;
+        glVertex2f(cx + cos(a) * r, cy + sin(a) * r);
+    }
+    glEnd();
+}
+
+void drawPacman(float cx, float cy, float r, float angle) {
+    glBegin(GL_TRIANGLE_FAN);
+
+    glVertex2f(cx, cy);
+
+    for (int i = 0; i <= 40; i++) {
+        float a = angle + (2 * 3.1415926f - 2 * angle) * i / 40.0f;
+        glVertex2f(cx + cos(a) * r, cy + sin(a) * r);
+    }
+
+    glEnd();
+
+    glColor3f(0, 0, 0);
+    drawCircle(cx + r * 0.25f, cy + r * 0.35f,r*0.12f);
+}
+
+void drawText(float x, float y, const std::string& s) {
+    glRasterPos2f(x, y);
+    for (char c : s)
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, c);
+}
+
+void specialKeys(int key, int, int) {
+
+    if (gameOver || remainingSeconds <= 0) return;
+
+    int dr = 0, dc = 0;
+    if (key == GLUT_KEY_RIGHT) dc = 1;
+    if (key == GLUT_KEY_LEFT) dc = -1;
+    if (key == GLUT_KEY_UP) dr = -1;
+    if (key == GLUT_KEY_DOWN) dr = 1;
+
+    int nr = player.cellR + dr;
+    int nc = player.cellC + dc;
+
+    if (!isWallCell(nr, nc)) {
+
+        player.cellR = nr;
+        player.cellC = nc;
+        cellCenter(nr, nc, player.x, player.y);
+	
+
+	// Collect Dot
+        if (maze[nr][nc] == 2) {
+            maze[nr][nc] = 0;
+            collectedDots++;
+        }
+        
+        if (maze[nr][nc] == 5) { trap cell
+            remainingSeconds -= TRAP_PENALTY_SECONDS;
+            if (remainingSeconds < 0) remainingSeconds = 0;
+            maze[nr][nc] = 0; 
+            
+            if (remainingSeconds <= 0) {
+                gameOver = true;
+                win = false;
+            }
+        }
+
+        if (maze[nr][nc] == 3 && remainingSeconds > 0) {
+            win = true;
+            gameOver = true;
+        }
+    }
+
+    glutPostRedisplay();
+}
+
+void keyboard(unsigned char key, int, int) {
+    if (key == 27 || key == 'q' || key == 'Q') exit(0);
+    if (key == 'r' || key == 'R') {
+        extern void resetGame();
+        resetGame();
+    }
+}
+
+void updateEnemies(float dt) {
+    for (auto& e : enemies) {
+        if (e.horizontal) e.x += e.dir * e.speed * dt;
+        else e.y += e.dir * e.speed * dt;
+
+        float totalW = COLS * CELL_SIZE;
+        float totalH = ROWS * CELL_SIZE;
+        float left = -totalW / 2.0f;
+        float top = totalH / 2.0f;
+
+        int c = int((e.x - left) / CELL_SIZE);
+        int r = int((top - e.y) / CELL_SIZE);
+
+        if (!inBounds(r, c) || isWallCell(r, c)) {
+            e.dir *= -1;
+        }
+    }
+}
+
+void checkCollision() {
+    for (auto& e : enemies) {
+        float dx = e.x - player.x;
+        float dy = e.y - player.y;
+        if (dx * dx + dy * dy < (18 * 18)) {
+            gameOver = true;
+            win = false;
+        }
+    }
+}
+
+void frameTimer(int) {
+    if (!gameOver) {
+        updateEnemies(0.016f);
+        checkCollision();
+    }
+    glutPostRedisplay();
+    glutTimerFunc(16, frameTimer, 0);
+}
+
+void secondTimer(int) {
+    if (!gameOver && !win) {
+        remainingSeconds--;
+        if (remainingSeconds <= 0) {
+            remainingSeconds = 0;
+            gameOver = true;
+            win = false;
+        }
+    }
+    glutPostRedisplay();
+    glutTimerFunc(1000, secondTimer, 0);
+}
+
+void drawScene() {
+    glClearColor(0.9f, 0.9f, 0.9f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    float cx, cy;
+
+    for (int r = 0; r < ROWS; r++) {
+        for (int c = 0; c < COLS; c++) {
+            cellCenter(r, c, cx, cy);
+
+            if (maze[r][c] == 1) {
+                glColor3f(0.2, 0.2, 0.2);
+                drawRectWorld(cx, cy, CELL_SIZE - 2, CELL_SIZE - 2);
+            }
+            else if (maze[r][c] == 2) {
+                glColor3f(0.9, 0.7, 0); 
+                drawCircle(cx, cy, 6);
+            }
+            else if (maze[r][c] == 3) {
+                glColor3f(0, 0.7, 0);
+                drawRectWorld(cx, cy, CELL_SIZE - 5, CELL_SIZE - 5);
+            }
+            else if (maze[r][c] == 5) {
+                glColor3f(0.9,0.7,0.0); 
+                drawCircle(cx, cy, 6);
+            }
+        }
+    }
+
+    for (auto& e : enemies) {
+        glColor3f(0.9, 0.1, 0.1);
+        drawCircle(e.x, e.y, 10);
+    }
+
+    glColor3f(1, 1, 0); 
+    drawPacman(player.x, player.y,12.0,0.5f);
+
+    float totalW = COLS * CELL_SIZE;
+    float totalH = ROWS * CELL_SIZE;
+
+    float tx = -totalW / 2 + 10;
+    float ty =  totalH / 2 - 25;
+
+    if (remainingSeconds <= 6)
+        glColor3f(1, 0, 0);
+    else
+        glColor3f(1, 1, 1);
+
+    drawText(tx, ty, "TIME LEFT: " + std::to_string(remainingSeconds));
+
+    if (gameOver) {
+        std::string msg;
+
+        if (win) {
+            glColor3f(0.0f, 1.0f, 0.0f);
+            msg = "YOU WIN!";
+        }
+        else {
+            glColor3f(1.0f, 1.0f, 0.0f);
+            msg = "TIME OVER - YOU LOSE!";
+        }
+
+        drawText(-120, 0, msg);
+    }
+
+    glutSwapBuffers();
+}
+
+void resetGame() {
+
+    int original[ROWS][COLS] = {
+        {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+		{1,2,2,0,0,0,1,0,0,0,2,2,2,3,1},
+		{1,0,1,1,5,1,1,1,1,0,1,1,0,0,1},
+		{1,0,1,0,0,0,0,0,1,0,0,1,0,2,1},
+		{1,0,1,0,1,1,1,0,1,1,0,1,1,0,1},
+		{1,0,0,0,0,2,0,5,0,1,0,0,0,2,1},
+		{1,0,1,1,1,1,1,1,0,1,1,1,0,0,1},
+		{1,2,0,0,5,0,0,1,0,0,5,1,0,2,1},
+		{1,1,1,0,1,1,0,1,1,1,0,1,0,0,1},
+		{1,4,0,0,0,0,0,0,0,0,0,0,2,0,1},
+		{1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
+    };
+
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++)
+            maze[r][c] = original[r][c];
+
+    collectedDots = 0;
+    totalDots = 0;
+
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++)
+            if (maze[r][c] == 2) totalDots++;
+
+    player.cellR = 1;
+    player.cellC = 1;
+    cellCenter(1, 1, player.x, player.y);
+
+    enemies.clear();
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++)
+            if (maze[r][c] == 4) {
+                Enemy e;
+                cellCenter(r, c, e.x, e.y);
+                e.horizontal = true;
+                e.dir = 1;
+                e.speed = 700;
+                enemies.push_back(e);
+                maze[r][c] = 0;
+            }
+
+    remainingSeconds = START_TIME_SECONDS;
+    gameOver = false;
+    win = false;
+}
+
+void reshape(int w, int h) {
+    glViewport(0, 0, w, h);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+
+    float totalW = COLS * CELL_SIZE;
+    float totalH = ROWS * CELL_SIZE;
+
+    glOrtho(-totalW / 2, totalW / 2,
+            -totalH / 2, totalH / 2,
+            -1, 1);
+
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+}
+
+int main(int argc, char** argv) {
+
+    glutInit(&argc, argv);
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA);
+    glutInitWindowSize(COLS * 60, ROWS * 60);
+    glutCreateWindow("Maze");
+
+    resetGame();
+
+    glutDisplayFunc(drawScene);
+    glutReshapeFunc(reshape);
+    glutSpecialFunc(specialKeys);
+    glutKeyboardFunc(keyboard);
+
+    glutTimerFunc(16, frameTimer, 0);
+    glutTimerFunc(1000, secondTimer, 0);
+
+    glutMainLoop();
+    return 0;
+}
